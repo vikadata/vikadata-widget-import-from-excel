@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Button, Loading } from "@vikadata/components";
 import { useDatasheet, useActiveViewId, useFields } from "@vikadata/widget-sdk";
 import * as XLSX from "xlsx";
+import { parseImportNumber } from "./parse_number";
 
 export const ExcelImport: React.FC = () => {
   const viewId = useActiveViewId();
@@ -109,7 +110,7 @@ export const ExcelImport: React.FC = () => {
     // 以二进制方式打开文件
     fileReader.readAsBinaryString(files[0]);
     
-    if (!mention) return null;
+    if (!mention) return;
     
     setProgressState(true);
 
@@ -125,10 +126,12 @@ export const ExcelImport: React.FC = () => {
         // 默认只读取第一张表;
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
+        const rangeStart = XLSX.utils.decode_range(ws["!ref"] || "A1").s;
         // 利用 sheet_to_json 方法将 excel 转成 json 数据
         const data: any[] = XLSX.utils.sheet_to_json(ws, {
           header: 1,
           raw: true,
+          blankrows: true,
         });
         // console.log("导入文件的原始数据：", data);
 
@@ -156,9 +159,9 @@ export const ExcelImport: React.FC = () => {
           return;
         }
 
-        const newData: any[] = data.filter(function (s: any[]) {
-          return s.length != 0 && s;
-        });
+        const newData = data
+          .map((record: any[], rowIndex: number) => ({ record, rowIndex }))
+          .filter(({ record }) => record.length !== 0);
         const newDataNum = newData.length;
 
         let bigDataWarning: Boolean =
@@ -175,12 +178,6 @@ export const ExcelImport: React.FC = () => {
             data === 1 || data === true ? true : false;
           const handleMultiSelectType = (data: any) =>
             String(data).split(",");
-          const handleCurrencyType = (data: any) => {
-            // 避免源数据中含有货币符号
-            return typeof data != "number"
-              ? Number(data.match(/-?[0-9]+(.[0-9]+)?/)[0])
-              : data;
-          };
           const handlePercentType = (data: any) => {
             // 百分比类型字段处理
             return typeof data === "number"
@@ -189,25 +186,19 @@ export const ExcelImport: React.FC = () => {
               ? Number(data.match(/-?[0-9]+(.[0-9]+)?/)[0])
               : Number(data.match(/-?[0-9]+(.[0-9]+)?/)[0]) * 100;
           };
-          const handleNumberType = (data: any) => {
-            // 数字类型字段处理
-            return typeof data === "number"
-              ? data
-              : Number(data.match(/-?[0-9]+(.[0-9]+)?/)[0]);
-          };
 
           // 定义数据处理映射
           let fieldHandle = {
             DateTime: handleDateTimeType,
-            Number: handleNumberType,
+            Number: parseImportNumber,
             Checkbox: handleCheckboxType,
             MultiSelect: handleMultiSelectType,
-            Currency: handleCurrencyType,
+            Currency: parseImportNumber,
             Percent: handlePercentType,
-            Rating: handleNumberType,
+            Rating: parseImportNumber,
           };
 
-          newData.forEach((record: any[]) => {
+          newData.forEach(({ record, rowIndex }) => {
             const valuesMap = new Object();
 
             fields.map((field) => {
@@ -220,8 +211,8 @@ export const ExcelImport: React.FC = () => {
               const index: number = header.indexOf(field.name);
 
               if (index === -1) return;
+              const handleType = fieldHandle[field.type];
               try {
-                let handleType = fieldHandle[field.type];
                 var parseData =
                   !String(record[index]) ||
                   String(record[index]) === "undefined"
@@ -234,6 +225,13 @@ export const ExcelImport: React.FC = () => {
                 }
                 valuesMap[field.id] = parseData;
               } catch (error) {
+                if (handleType === parseImportNumber) {
+                  const row = rangeStart.r + rowIndex + 1;
+                  const cell = XLSX.utils.encode_cell({ r: row, c: rangeStart.c + index });
+                  throw new Error(
+                    `无法导入 ${cell}（第 ${row + 1} 行，列“${field.name}”）：请填写有效数字或金额。未写入任何记录。`
+                  );
+                }
                 valuesMap[field.id] = null;
               }
             });

@@ -18,7 +18,9 @@
   "license": "MIT",
   "scripts": {
     "start": "widget-cli start",
-    "release": "widget-cli release"
+    "release": "widget-cli release",
+    "test": "node --test tests/excel_import.test.cjs",
+    "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
     "react": "16.14.0",
